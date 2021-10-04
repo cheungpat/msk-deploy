@@ -16,19 +16,17 @@ Each CloudFormation stack serves different purposes. They are separately created
 
 ## Types of resources created from CloudFormation stacks
 
- * AWS::EC2::Instance
- * AWS::EC2::SecurityGroup
- * AWS::EC2::SecurityGroupIngress
- * AWS::Glue::Registry
- * AWS::IAM::Group
- * AWS::IAM::InstanceProfile
- * AWS::IAM::Policy
- * AWS::IAM::Role
- * AWS::Logs::LogGroup
- * AWS::MSK::Cluster
- * AWS::S3::Bucket
- * AWS::KMS::Alias
- * AWS::KMS::Key
+ * AWS::EC2::Instance - manage Kafka clusters
+ * AWS::EC2::SecurityGroup - firewall between Kafka clusters and clients
+ * AWS::Glue::Registry - event schema registry
+ * AWS::IAM::Group - Adminstrator and client permissions
+ * AWS::IAM::InstanceProfile - EC2 instance permissions
+ * AWS::IAM::Policy - Permission policies
+ * AWS::IAM::Role - EC2 instance role
+ * AWS::Logs::LogGroup - Log for Kafka clusters
+ * AWS::MSK::Cluster - Kafka clusters
+ * AWS::S3::Bucket - Event data, log and Kafka plugins
+ * AWS::KMS::Key - Storing username/password for Kafka clusters
 
 ## Stack Creation Instructions
 
