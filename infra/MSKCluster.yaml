@@ -1,0 +1,415 @@
+AWSTemplateFormatVersion: 2010-09-09
+Parameters:
+  VpcId:
+    Type: 'AWS::EC2::VPC::Id'
+    Description: 'The VPC in which the Kafka brokers will be deployed.'
+  SubnetIds:
+    Type: 'List<AWS::EC2::Subnet::Id>'
+    Description: 'The subnet where the Kafka brokers will be placed in. The selected subnets must be of the same VPC and the VPC must be the same as previously selected. The subnets should be each in a separate availability zone.'
+  MSKInstanceType:
+    Type: 'String'
+    Description: 'The instance type of each broker in the Kafka cluster. The larger the instance, the higher the performance, and the higher the cost.'
+    Default: 'kafka.t3.small'
+    AllowedValues:
+      - 'kafka.t3.small'
+      - 'kafka.m5.large'
+      - 'kafka.m5.xlarge'
+      - 'kafka.m5.2xlarge'
+      - 'kafka.m5.4xlarge'
+      - 'kafka.m5.8xlarge'
+      - 'kafka.m5.12xlarge'
+      - 'kafka.m5.16xlarge'
+      - 'kafka.m5.24xlarge'
+  MSKName:
+    Type: 'String'
+  MSKVersion:
+    Type: 'String'
+    Description: 'The version number of the Kafka brokers. Please make sure the version number is available.'
+    Default: '2.6.2'
+  MSKVolumeSize:
+    Type: 'Number'
+    Description: 'The size of the EBS volume of each Kafka broker.'
+    Default: '100'
+  MSKBrokerCount:
+    Type: 'Number'
+    Description: 'The total number of brokers in the cluster. The value must be a multiple of the subnet count.'
+    Default: '3'
+    MinValue: '2'
+  CloudWatchLogEnabled:
+    Type: 'String'
+    Description: 'Whether to enable logging to AWS CloudWatch. This may incur fees.'
+    Default: 'false'
+    AllowedValues:
+      - "true"
+      - "false"
+  CloudWatchLogGroup:
+    Type: 'String'
+    Description: '(Optional) The name of the CloudWatch log group to send log to. If not specified, a new log group is created.'
+  S3LogEnabled:
+    Type: 'String'
+    Description: 'Whether to send log to S3 bucket. This may incur fees.'
+    Default: 'false'
+    AllowedValues:
+      - "true"
+      - "false"
+  S3LogBucket:
+    Type: 'String'
+    Description: '(Optional) The name of the S3 bucket to send log to. If not specified, a new bucket is created.'
+  MSKAdminIAMGroup:
+    Type: 'String'
+    Description: 'The IAM group for administrators to manage this cluster.'
+  MSKAdminSecurityGroup:
+    Type: 'AWS::EC2::SecurityGroup::Id'
+    Description: 'The security group for administrator to manage this cluster. Use the MSKAdminSecurityGroup output of the Foundation stack.'
+  DestinationBucket:
+    Type: 'String'
+    Description: '(Optional) The name of the S3 bucket to write (aka sink) events to. If not specified, a new bucket is created.'
+Metadata: 
+  AWS::CloudFormation::Interface: 
+    ParameterGroups: 
+      - 
+        Label: 
+          default: "Cluster Basics"
+        Parameters: 
+          - MSKName
+          - MSKVersion
+          - MSKInstanceType
+          - MSKBrokerCount
+          - MSKVolumeSize
+          - MSKAdminIAMGroup
+      - 
+        Label: 
+          default: "Networking"
+        Parameters: 
+          - VpcId
+          - SubnetIds
+          - MSKAdminSecurityGroup
+      - 
+        Label: 
+          default: "Logging"
+        Parameters: 
+          - S3LogEnabled
+          - S3LogBucket
+          - CloudWatchLogEnabled
+          - CloudWatchLogGroup
+Conditions:
+  EnableLogGroup: !Equals [!Ref CloudWatchLogEnabled, "true"]
+  EnableLogBucket: !Equals [!Ref S3LogEnabled, "true"]
+  CreateLogGroup: !And [ !Equals [!Ref CloudWatchLogEnabled, "true"], !Equals [!Ref CloudWatchLogGroup, ""] ]
+  CreateLogBucket: !And [ !Equals [!Ref S3LogEnabled, "true"], !Equals [!Ref S3LogBucket, ""] ]
+  CreateDestinationBucket: !Equals [!Ref DestinationBucket, ""]
+Resources:
+  MSKSecurityGroup:
+    Type: 'AWS::EC2::SecurityGroup'
+    Properties:
+      GroupDescription: !Sub
+        - 'Security group for ${ClusterName} MSK cluster'
+        - ClusterName: !Ref MSKName
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 2181
+          ToPort: 2181  # Zookeeper Plaintext
+          SourceSecurityGroupId: !Ref MSKAdminSecurityGroup
+        - IpProtocol: tcp
+          FromPort: 2182
+          ToPort: 2182  # Zookeeper TLS
+          SourceSecurityGroupId: !Ref MSKAdminSecurityGroup
+        - IpProtocol: tcp
+          FromPort: 9096
+          ToPort: 9096  # SASL (username/password)
+          SourceSecurityGroupId: !Ref MSKAdminSecurityGroup
+        - IpProtocol: tcp
+          FromPort: 9098
+          ToPort: 9098  # IAM
+          SourceSecurityGroupId: !Ref MSKAdminSecurityGroup
+  MSKSecurityGroupSelfIngressPlaintext:
+    Type: 'AWS::EC2::SecurityGroupIngress'
+    Properties:
+      IpProtocol: tcp
+      FromPort: 9092
+      ToPort: 9092
+      GroupId: !Ref MSKSecurityGroup
+      SourceSecurityGroupId: !Ref MSKSecurityGroup
+  MSKSecurityGroupSelfIngressTLS:
+    Type: 'AWS::EC2::SecurityGroupIngress'
+    Properties:
+      IpProtocol: tcp
+      FromPort: 9094
+      ToPort: 9094
+      GroupId: !Ref MSKSecurityGroup
+      SourceSecurityGroupId: !Ref MSKSecurityGroup
+  MSKSecurityGroupSelfIngressSASL:
+    Type: 'AWS::EC2::SecurityGroupIngress'
+    Properties:
+      IpProtocol: tcp
+      FromPort: 9096
+      ToPort: 9096
+      GroupId: !Ref MSKSecurityGroup
+      SourceSecurityGroupId: !Ref MSKSecurityGroup
+  MSKSecurityGroupSelfIngressIAM:
+    Type: 'AWS::EC2::SecurityGroupIngress'
+    Properties:
+      IpProtocol: tcp
+      FromPort: 9098
+      ToPort: 9098
+      GroupId: !Ref MSKSecurityGroup
+      SourceSecurityGroupId: !Ref MSKSecurityGroup
+  MSKCluster:
+    Type: 'AWS::MSK::Cluster'
+    Properties:
+      ClusterName: !Ref MSKName
+      BrokerNodeGroupInfo:
+        ClientSubnets: !Ref SubnetIds
+        InstanceType: !Ref MSKInstanceType
+        SecurityGroups:
+          - !GetAtt 
+            - MSKSecurityGroup
+            - GroupId
+        StorageInfo:
+          EBSStorageInfo:
+            VolumeSize: !Ref MSKVolumeSize
+      EncryptionInfo:
+        EncryptionInTransit:
+          ClientBroker: TLS
+          InCluster: true
+      EnhancedMonitoring: PER_TOPIC_PER_BROKER
+      KafkaVersion: !Ref MSKVersion
+      NumberOfBrokerNodes: !Ref MSKBrokerCount
+      ClientAuthentication:
+        Sasl:
+          Iam:
+            Enabled: true
+          Scram:
+            Enabled: true
+      LoggingInfo:
+        BrokerLogs:
+          CloudWatchLogs: !If
+            - EnableLogGroup
+            - Enabled: true
+              LogGroup: !If [CreateLogGroup, !Ref LogGroup, !Ref CloudWatchLogGroup]
+            - Enabled: false
+          S3: !If
+            - EnableLogBucket
+            - Enabled: true
+              Bucket: !If [CreateLogBucket, !Ref LogBucket, !Ref S3LogBucket]
+            - Enabled: false
+  ProducerGroup:
+    Type: 'AWS::IAM::Group'
+    Properties:
+      Path: /
+  ProducerPolicy:
+    Type: 'AWS::IAM::Policy'
+    Properties:
+      PolicyName: !Sub ['ProducerPolicy-${ClusterName}', { ClusterName: !Ref MSKName }
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          # Allow client to connect to cluster.
+          - Effect: Allow
+            Action:
+              - 'kafka-cluster:Connect'
+            Resource: !Sub
+              - 'arn:aws:kafka:${AWS::Region}:${AWS::AccountId}:*/${ClusterName}'
+              - ClusterName: !Ref MSKName
+          # Allow client to produce event to topics.
+          - Effect: Allow
+            Action:
+              - 'kafka-cluster:DescribeTopic'
+              - 'kafka-cluster:WriteData'
+              - 'kafka-cluster:WriteDataIdempotently'
+              - 'kafka-cluster:DescribeTransactionalId'
+              - 'kafka-cluster:AlterTransactionalId'
+            Resource: !Sub
+              - 'arn:aws:kafka:${AWS::Region}:${AWS::AccountId}:*/${ClusterName}/*'
+              - ClusterName: !Ref MSKName
+      Groups:
+        - !Ref ProducerGroup
+  ConsumerGroup:
+    Type: 'AWS::IAM::Group'
+    Properties:
+      Path: /
+  ConsumerPolicy:
+    Type: 'AWS::IAM::Policy'
+    Properties:
+      PolicyName: !Sub ['ConsumerPolicy-${ClusterName}', { ClusterName: !Ref MSKName }
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          # Allow client to connect to cluster.
+          - Effect: Allow
+            Action:
+              - 'kafka-cluster:Connect'
+            Resource: !Sub
+              - 'arn:aws:kafka:${AWS::Region}:${AWS::AccountId}:*/${ClusterName}'
+              - ClusterName: !Ref MSKName
+          # Allow client to consume event from topics.
+          - Effect: Allow
+            Action:
+              - 'kafka-cluster:DescribeTopic'
+              - 'kafka-cluster:DescribeGroup'
+              - 'kafka-cluster:AlterGroup'
+              - 'kafka-cluster:AlterGroup'
+              - 'kafka-cluster:ReadData'
+            Resource: !Sub
+              - 'arn:aws:kafka:${AWS::Region}:${AWS::AccountId}:*/${ClusterName}/*'
+              - ClusterName: !Ref MSKName
+      Groups:
+        - !Ref ConsumerGroup
+  LogGroup:
+    Type: 'AWS::Logs::LogGroup'
+    Condition: CreateLogGroup
+    Properties:
+      RetentionInDays: 7
+  LogBucket:
+    Type: 'AWS::S3::Bucket'
+    Condition: CreateLogBucket
+    DeletionPolicy: 'Retain'
+  MSKConnectDestinationBucket:
+    Type: 'AWS::S3::Bucket'
+    Condition: CreateDestinationBucket
+    DeletionPolicy: 'Retain'
+  MSKConnectDestinationBucketRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      Path: /
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - kafkaconnect.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'
+  MSKConnectDestinationBucketPolicy:
+    Type: 'AWS::IAM::Policy'
+    Properties:
+      PolicyName: !Sub ['MSKConnectDestinationBucketPolicy-${ClusterName}', { ClusterName: !Ref MSKName }
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          # Allow MSK Connect to find destination bucket
+          - Effect: Allow
+            Action:
+              - 's3:ListAllMyBuckets'
+            Resource: '*'
+          # Allow MSK Connect to read/write destination bucket
+          - Effect: Allow
+            Action:
+              - 's3:PutObject'
+              - 's3:GetObject'
+              - 's3:ListBucket'
+              - 's3:DeleteObject'
+              - 's3:GetBucketLocation'
+              - 's3:AbortMultipartUpload'
+              - 's3:ListMultipartUploadParts'
+              - 's3:ListBucketMultipartUploads'
+            Resource:
+              - !Sub
+                - 'arn:aws:s3:::${BucketName}'
+                - BucketName: !If [CreateDestinationBucket, !Ref MSKConnectDestinationBucket, !Ref DestinationBucket] 
+              - !Sub
+                - 'arn:aws:s3:::${BucketName}/*'
+                - BucketName: !If [CreateDestinationBucket, !Ref MSKConnectDestinationBucket, !Ref DestinationBucket]
+          # Allow MSK Connect to connect to cluster
+          - Effect: Allow
+            Action:
+              - 'kafka-cluster:Connect'
+              - 'kafka-cluster:DescribeCluster'
+            Resource:
+              - !Ref MSKCluster
+          # Allow MSK Connect to read/write data to topic
+          - Effect: Allow
+            Action:
+              - 'kafka-cluster:ReadData'
+              - 'kafka-cluster:WriteData'
+              - 'kafka-cluster:DescribeTopic'
+            Resource: !Sub
+              - 'arn:aws:kafka:${AWS::Region}:${AccountId}:topic/${ClusterName}/*'
+              - ClusterName: !Ref MSKName
+                AccountId: !Ref AWS::AccountId
+          - Effect: Allow
+            Action:
+              - 'kafka-cluster:CreateTopic'
+              - 'kafka-cluster:ReadData'
+              - 'kafka-cluster:WriteData'
+              - 'kafka-cluster:DescribeTopic'
+            Resource: !Sub
+              - 'arn:aws:kafka:${AWS::Region}:${AccountId}:topic/${ClusterName}/*/__amazon_msk_connect_*'
+              - ClusterName: !Ref MSKName
+                AccountId: !Ref AWS::AccountId
+          - Effect: Allow
+            Action:
+              - 'kafka-cluster:AlterGroup'
+              - 'kafka-cluster:DescribeGroup'
+            Resource:
+              - !Sub
+                - 'arn:aws:kafka:${AWS::Region}:${AccountId}:group/${ClusterName}/*/__amazon_msk_connect_*'
+                - ClusterName: !Ref MSKName
+                  AccountId: !Ref AWS::AccountId
+              - !Sub
+                - 'arn:aws:kafka:${AWS::Region}:${AccountId}:group/${ClusterName}/*/connect-*'
+                - ClusterName: !Ref MSKName
+                  AccountId: !Ref AWS::AccountId
+      Roles:
+        - !Ref MSKConnectDestinationBucketRole
+  MSKLogPolicy:
+    Type: 'AWS::IAM::Policy'
+    Condition: EnableLogGroup
+    Properties:
+      PolicyName: !Sub ['MSKLogPolicy-${ClusterName}', { ClusterName: !Ref MSKName }
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          # Allow administrator to see logs
+          - Effect: Allow
+            Action:
+              - 'logs:*'
+            Resource:
+              - !Sub
+                - 'arn:aws:logs:*:${AccountId}:log-group:${LogGroup}'
+                - AccountId: !Ref AWS::AccountId
+                  LogGroup: !If [CreateLogGroup, !Ref LogGroup, !Ref CloudWatchLogGroup]
+              - !Sub
+                - 'arn:aws:logs:*:${AccountId}:log-group:${LogGroup}:log-stream:*'
+                - AccountId: !Ref AWS::AccountId
+                  LogGroup: !If [CreateLogGroup, !Ref LogGroup, !Ref CloudWatchLogGroup]
+      Groups:
+        - !Ref MSKAdminIAMGroup
+Outputs:
+  MSKSecurityGroupId:
+    Description: The ID of the security group created for the MSK clusters
+    Value: !GetAtt 
+      - MSKSecurityGroup
+      - GroupId
+  MSKArn:
+    Description: The ARN for the MSK cluster
+    Value: !Ref MSKCluster
+  LogGroup:
+    Description: The log group where the log of the cluster is sent to.
+    Value: !If [CreateLogGroup, !Ref LogGroup, !Ref CloudWatchLogGroup]
+  LogBucket:
+    Description: The S3 bucket where the log of the cluster is sent to.
+    Value: !If [CreateLogBucket, !Ref LogBucket, !Ref S3LogBucket]
+  ProducerPolicy:
+    Description: The name of the policy for sending event to the MSK cluster.
+    Value: !Ref ProducerPolicy
+  ProducerGroup:
+    Description: The name of the group for sending event to the MSK cluster.
+    Value: !Ref ProducerGroup
+  ConsumerPolicy:
+    Description: The name of the policy for reading event from the MSK cluster.
+    Value: !Ref ConsumerPolicy
+  ConsumerGroup:
+    Description: The name of the group for reading event from the MSK cluster.
+    Value: !Ref ConsumerGroup
+  MSKConnectDestinationBucket:
+    Description: The name of the S3 bucket for MSK connect
+    Value: !If [CreateDestinationBucket, !Ref MSKConnectDestinationBucket, !Ref DestinationBucket]
+  MSKConnectDestinationBucketRole:
+    Description: The name of the role for accessing the MSK connect bucket.
+    Value: !Ref MSKConnectDestinationBucketRole
+  MSKConnectDestinationBucketPolicy:
+    Description: The name of the policy for accessing the MSK connect bucket.
+    Value: !Ref MSKConnectDestinationBucketPolicy

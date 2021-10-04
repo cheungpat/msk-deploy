@@ -1,0 +1,165 @@
+AWSTemplateFormatVersion: 2010-09-09
+Parameters:
+  KeyName:
+    Description: Name of an existing EC2 KeyPair to enable SSH access to the instance
+    Type: 'AWS::EC2::KeyPair::KeyName'
+    ConstraintDescription: Can contain only ASCII characters.
+  VpcId:
+    Type: 'AWS::EC2::VPC::Id'
+    Description: 'The VPC in which the admin client will be deployed.'
+  KafkaClientSubnetId:
+    Type: 'AWS::EC2::Subnet::Id'
+    Description: 'The subnet in which the admin client will be deployed.'
+  KafkaClientInstanceType:
+    Type: 'String'
+    Description: 'The instance type of each broker in the Kafka cluster. The larger the instance, the higher the performance, and the higher the cost.'
+    Default: 't3.micro'
+    AllowedValues:
+      - 't3.nano'
+      - 't3.micro'
+      - 't3.small'
+      - 't3.medium'
+      - 'm5.large'
+      - 'm5.xlarge'
+      - 'm5.2xlarge'
+  MSKVersion:
+    Type: 'String'
+    Description: 'The version number of the Kafka brokers. Please make sure the version number is available.'
+    Default: '2.6.2'
+  MSKAdminSecurityGroup:
+    Type: 'AWS::EC2::SecurityGroup::Id'
+    Description: 'The security group that has access to MSK clusters. Use the MSKAdminSecurityGroup output of the Foundation stack.'
+Mappings:
+  RegionAMI:
+    af-south-1:
+      AMI: ami-050a7bdb176247d86
+    ap-east-1:
+      AMI: ami-0c8b2950fd2d6258d
+    ap-northeast-1:
+      AMI: ami-02a56e430b32bc0ba
+    ap-northeast-2:
+      AMI: ami-0cceb8e71553d73f0
+    ap-northeast-3:
+      AMI: ami-0c2a318a1451b5e04
+    ap-south-1:
+      AMI: ami-01ad2fc4607cc742e
+    ap-southeast-1:
+      AMI: ami-072466d111bc68d81
+    ap-southeast-2:
+      AMI: ami-0606a3915440b2b72
+    ca-central-1:
+      AMI: ami-07e39d7bd85085b96
+    eu-central-1:
+      AMI: ami-0afc0414aefc9eaa7
+    eu-north-1:
+      AMI: ami-0aacae1c06b3c30a0
+    eu-south-1:
+      AMI: ami-0de18ead87279df15
+    eu-west-1:
+      AMI: ami-0c1aea1d6f3bdd76b
+    eu-west-2:
+      AMI: ami-00f314baca4922fe3
+    eu-west-3:
+      AMI: ami-021a18be6333356c7
+    me-south-1:
+      AMI: ami-0b1c182c7f674cfd0
+    sa-east-1:
+      AMI: ami-0a62c6929da4659cb
+    us-east-1:
+      AMI: ami-089b5711e63812c2a
+    us-east-2:
+      AMI: ami-0ac4906b9504bec77
+    us-west-1:
+      AMI: ami-04b8a53b12fd66ba7
+    us-west-2:
+      AMI: ami-0f6970790b38613ef
+Resources:
+  KafkaClient:
+    Type: 'AWS::EC2::Instance'
+    Properties:
+      InstanceType: !Ref KafkaClientInstanceType
+      KeyName: !Ref KeyName
+      IamInstanceProfile: !Ref KafkaClientProfile
+      SubnetId: !Ref KafkaClientSubnetId
+      SecurityGroupIds:
+        - !Ref MSKAdminSecurityGroup
+      ImageId: !FindInMap 
+        - RegionAMI
+        - !Ref 'AWS::Region'
+        - AMI
+      Tags:
+        - Key: Name
+          Value: KafkaClientInstance
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+
+          apt update
+          apt install -y default-jre zip
+          
+          # Install Kafka
+          wget https://dlcdn.apache.org/kafka/${MSKVersion}/kafka_2.12-${MSKVersion}.tgz
+          tar -zxv -C /usr/local -f kafka_2.12-${MSKVersion}.tgz
+          mv /usr/local/kafka_2.12-${MSKVersion} /usr/local/kafka
+          wget -P /usr/local/kafka/libs https://github.com/aws/aws-msk-iam-auth/releases/download/v1.1.1/aws-msk-iam-auth-1.1.1-all.jar
+
+          # Install AWS CLI
+          curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+          unzip awscliv2.zip
+          ./aws/install
+
+          # Configure user directory
+          echo "export PATH=\$PATH:/usr/local/kafka/bin" >> ~ubuntu/.bashrc
+          cat > ~ubuntu/client.properties << EOF
+          security.protocol=SASL_SSL
+          sasl.mechanism=AWS_MSK_IAM
+          sasl.jaas.config=software.amazon.msk.auth.iam.IAMLoginModule required;
+          sasl.client.callback.handler.class=software.amazon.msk.auth.iam.IAMClientCallbackHandler
+          EOF
+          chown ubuntu:ubuntu ~ubuntu/client.properties
+  KafkaClientRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      Path: /
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - ec2.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'
+      ManagedPolicyArns:
+        - 'arn:aws:iam::aws:policy/AmazonMSKReadOnlyAccess'
+        - 'arn:aws:iam::aws:policy/AmazonMSKConnectReadOnlyAccess'
+  KafkaClientProfile:
+    Type: 'AWS::IAM::InstanceProfile'
+    Properties:
+      Roles:
+        - !Ref KafkaClientRole
+  MSKClientAdminPolicy:
+    Type: 'AWS::IAM::Policy'
+    Properties:
+      PolicyName: 'MSKClientAdminPolicy'
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          # Allow administrator to produce consume events
+          - Effect: Allow
+            Action:
+              - 'kafka-cluster:*'
+            Resource: '*'
+      Roles:
+        - !Ref KafkaClientRole
+Outputs:
+  KafkaClientPublicDNS:
+    Description: The public DNS for the Kafka client EC2 instance
+    Value: !GetAtt 
+      - KafkaClient
+      - PublicDnsName
+  KafkaClientPrivateDNS:
+    Description: The private DNS for the Kafka client EC2 instance
+    Value: !GetAtt 
+      - KafkaClient
+      - PrivateDnsName

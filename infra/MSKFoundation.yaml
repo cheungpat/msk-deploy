@@ -1,0 +1,271 @@
+AWSTemplateFormatVersion: 2010-09-09
+Parameters:
+  MSKSecretManagerKeyAliasName:
+    Type: 'String'
+    Default: 'AmazonMSKSecretManagerKey'
+    Description: 'The name of the alias for the KMS key used to encrypt Kafka username/password. This name is shown to administrator for selection when creating username/password. If the MSK cluster does not use username/password authentication, there is no need to create this stack.'
+    MinLength: 1
+  CreateAdminSecurityGroup:
+    Type: 'String'
+    Description: 'If true, a security group will be created for administrator. If false, the administrator will need to set up security group manually.'
+    Default: 'true'
+    AllowedValues:
+      - "true"
+      - "false"
+  AdminSecurityGroupVpcId:
+    Type: 'AWS::EC2::VPC::Id'
+    Description: 'The VPC in which administrator security group will be created. Ignored if security group is not created, but you still need to pick one.'
+Metadata: 
+  AWS::CloudFormation::Interface: 
+    ParameterGroups: 
+      - 
+        Label: 
+          default: "Basics"
+        Parameters: 
+          - MSKSecretManagerKeyAliasName
+      - 
+        Label: 
+          default: "Networking"
+        Parameters: 
+          - CreateAdminSecurityGroup
+          - AdminSecurityGroupVpcId
+Conditions:
+  CreateAdminSecurityGroup: !Equals [!Ref CreateAdminSecurityGroup, "true"]
+Resources:
+  MSKSecretManagerKey:
+    Type: AWS::KMS::Key
+    Properties: 
+      Enabled: true
+      KeyPolicy: 
+        Version: '2012-10-17'
+        Statement:
+          # Allow root account to manage the key
+          # NOTE: This is requried by AWS.
+          # See also: https://aws.amazon.com/premiumsupport/knowledge-center/update-key-policy-future/
+          - Effect: 'Allow'
+            Principal:
+              AWS: !Sub
+                - 'arn:aws:iam::${AccountId}:root'
+                - AccountId: !Ref AWS::AccountId
+            Action:
+              - 'kms:*'
+            Resource: '*'
+          # Allow MSK service to use KMS secrets
+          - Effect: 'Allow'
+            Principal:
+              AWS: !Sub
+                - 'arn:aws:iam::${AccountId}:role/aws-service-role/kafka.amazonaws.com/AWSServiceRoleForKafka'
+                - AccountId: !Ref AWS::AccountId
+            Action:
+              - 'kms:Encrypt'
+              - 'kms:Decrypt'
+              - 'kms:ReEncrypt*'
+              - 'kms:GenerateDataKey*'
+              - 'kms:DescribeKey'
+            Resource: '*'
+          # Allow MSK service to attach to secrets
+          - Effect: 'Allow'
+            Principal:
+              AWS: !Sub
+                - 'arn:aws:iam::${AccountId}:role/aws-service-role/kafka.amazonaws.com/AWSServiceRoleForKafka'
+                - AccountId: !Ref AWS::AccountId
+            Action:
+              - 'kms:CreateGrant'
+              - 'kms:ListGrants'
+              - 'kms:RevokeGrant'
+            Resource: '*'
+            Condition:
+              Bool:
+                kms:GrantIsForAWSResource: 'true'
+  MSKSecretManagerAlias:
+    Type: AWS::KMS::Alias
+    Properties: 
+      AliasName: !Sub
+        - 'alias/${AliasName}'
+        - AliasName: !Ref MSKSecretManagerKeyAliasName
+      TargetKeyId: !Ref MSKSecretManagerKey
+  MSKAdminSecurityGroup:
+    Type: 'AWS::EC2::SecurityGroup'
+    Condition: CreateAdminSecurityGroup
+    Properties:
+      GroupDescription: Allow administrators to access MSK cluster.
+      VpcId: !Ref AdminSecurityGroupVpcId
+  MSKAdminGroup:
+    Type: 'AWS::IAM::Group'
+    Properties:
+      Path: /
+      ManagedPolicyArns:
+        - 'arn:aws:iam::aws:policy/AmazonMSKFullAccess'
+  MSKSecretManagerPolicy:
+    Type: 'AWS::IAM::Policy'
+    Properties:
+      PolicyName: 'MSKSecretManagerPolicy'
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          # Allow administrator to list secret manager secrets
+          - Effect: Allow
+            Action:
+              - 'secretsmanager:ListSecrets'
+            Resource: '*'
+          # Allow administrator to create update delete Amazon MSK secrets
+          - Effect: Allow
+            Action:
+              - 'secretsmanager:GetSecretValue'
+              - 'secretsmanager:DescribeSecret'
+              - 'secretsmanager:PutSecretValue'
+              - 'secretsmanager:CreateSecret'
+              - 'secretsmanager:DeleteSecret'
+              - 'secretsmanager:UpdateSecret'
+            Resource: !Sub
+              - 'arn:aws:secretsmanager:${AWS::Region}:${AccountId}:secret:AmazonMSK_*'
+              - AccountId: !Ref AWS::AccountId
+          # Allow administrator to select the MSK key to encrypt secret
+          - Effect: Allow
+            Action:
+              - 'kms:ListAliases'
+            Resource: '*'
+          # Allow administrator to encrypt decrypt secret using the MSK key
+          - Effect: Allow
+            Action:
+              - 'kms:Decrypt'
+              - 'kms:Encrypt'
+              - 'kms:ReEncrypt*'
+              - 'kms:GenerateDataKey*'
+              - 'kms:DescribeKey'
+            Resource: !Sub
+              - 'arn:aws:kms:${AWS::Region}:${AccountId}:key/${MSKSecretManagerKey}'
+              - AccountId: !Ref AWS::AccountId
+      Groups:
+        - !Ref MSKAdminGroup
+  MSKConnectFullAccessPolicy:
+    Type: 'AWS::IAM::Policy'
+    Properties:
+      PolicyName: 'MSKConnectFullAccessPolicy'
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          # Allow administrator to manage MSK Connect
+          - Effect: Allow
+            Action:
+              - 'kafkaconnect:*'
+              - 'ec2:CreateNetworkInterface'
+              - 'ec2:DescribeSubnets'
+              - 'ec2:DescribeVpcs'
+              - 'ec2:DescribeSecurityGroups'
+            Resource: '*'
+          - Effect: Allow
+            Action:
+              - 'iam:ListRoles'
+              - 'iam:PassRole'
+            Resource: '*'
+          - Effect: Allow
+            Action:
+              - 'iam:CreateServiceLinkedRole'
+            Resource: 'arn:aws:iam::*:role/aws-service-role/kafkaconnect.amazonaws.com/AWSServiceRoleForKafkaConnect*'
+            Condition:
+              StringLike: {"iam:AWSServiceName": "kafkaconnect.amazonaws.com"}
+      Groups:
+        - !Ref MSKAdminGroup
+  MSKClientAdminPolicy:
+    Type: 'AWS::IAM::Policy'
+    Properties:
+      PolicyName: 'MSKClientAdminPolicy'
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          # Allow administrator to produce consume events
+          - Effect: Allow
+            Action:
+              - 'kafka-cluster:*'
+            Resource: '*'
+      Groups:
+        - !Ref MSKAdminGroup
+  MSKConnectPluginBucket:
+    Type: 'AWS::S3::Bucket'
+    DeletionPolicy: 'Retain'
+  MSKConnectPluginBucketPolicy:
+    Type: 'AWS::IAM::Policy'
+    Properties:
+      PolicyName: 'MSKConnectPluginBucketPolicy'
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          # Allow administrator to manage MSK Connect Plugin
+          - Effect: Allow
+            Action:
+              - 's3:ListAllMyBuckets'
+            Resource: '*'
+          - Effect: Allow
+            Action:
+              - 's3:PutObject'
+              - 's3:GetObject'
+              - 's3:ListBucket'
+              - 's3:DeleteObject'
+              - 's3:GetBucketLocation'
+            Resource:
+              - !Sub
+                - 'arn:aws:s3:::${BucketName}'
+                - BucketName: !Ref MSKConnectPluginBucket
+              - !Sub
+                - 'arn:aws:s3:::${BucketName}/*'
+                - BucketName: !Ref MSKConnectPluginBucket
+      Groups:
+        - !Ref MSKAdminGroup
+  GlueRegistryStaging:
+    Type: 'AWS::Glue::Registry'
+    Properties:
+      Name: !Sub
+        - '${StackName}-Staging'
+        - StackName: !Ref AWS::StackName
+  GlueRegistryProduction:
+    Type: 'AWS::Glue::Registry'
+    Properties:
+      Name: !Sub
+        - '${StackName}-Production'
+        - StackName: !Ref AWS::StackName
+  GlueRegistryPolicy:
+    Type: 'AWS::IAM::Policy'
+    Properties:
+      PolicyName: 'GlueRegistryPolicy'
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          # Allow administrator to list Glue Registry
+          - Effect: Allow
+            Action:
+              - 'glue:ListRegistries'
+            Resource: '*'
+          # Allow administrator to manage Glue Registry and Schemas
+          - Effect: Allow
+            Action:
+              - 'glue:*'
+            Resource:
+              - !Sub
+                - 'arn:aws:glue:*:${AccountId}:registry/*'
+                - AccountId: !Ref AWS::AccountId
+              - !Sub
+                - 'arn:aws:glue:*:${AccountId}:schema/*'
+                - AccountId: !Ref AWS::AccountId
+      Groups:
+        - !Ref MSKAdminGroup
+Outputs:
+  MSKSecretManagerKey:
+    Description: The KMS key ID to encrypt/decrypt MSK username/password.
+    Value: !Ref MSKSecretManagerKey
+  MSKAdminSecurityGroup:
+    Description: The security group used by administrator to manage MSK clusters.
+    Value: !Ref MSKAdminSecurityGroup
+    Condition: CreateAdminSecurityGroup
+  MSKAdminGroup:
+    Description: The name of the IAM group that administrator need to join to manage MSK clusters.
+    Value: !Ref MSKAdminGroup
+  MSKConnectPluginBucket:
+    Description: The name of the S3 plugin for uploading MSK Connect plugins.
+    Value: !Ref MSKConnectPluginBucket
+  GlueRegistryStaging:
+    Description: The Glue Schema Registry for staging environment
+    Value: !Ref GlueRegistryStaging
+  GlueRegistryProduction:
+    Description: The Glue Schema Registry for production environment
+    Value: !Ref GlueRegistryProduction
