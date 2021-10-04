@@ -201,7 +201,7 @@ Resources:
   ProducerPolicy:
     Type: 'AWS::IAM::Policy'
     Properties:
-      PolicyName: !Sub ['ProducerPolicy-${ClusterName}', { ClusterName: !Ref MSKName }
+      PolicyName: !Sub ['ProducerPolicy-${ClusterName}', { ClusterName: !Ref MSKName }]
       PolicyDocument:
         Version: "2012-10-17"
         Statement:
@@ -232,7 +232,7 @@ Resources:
   ConsumerPolicy:
     Type: 'AWS::IAM::Policy'
     Properties:
-      PolicyName: !Sub ['ConsumerPolicy-${ClusterName}', { ClusterName: !Ref MSKName }
+      PolicyName: !Sub ['ConsumerPolicy-${ClusterName}', { ClusterName: !Ref MSKName }]
       PolicyDocument:
         Version: "2012-10-17"
         Statement:
@@ -285,7 +285,7 @@ Resources:
   MSKConnectDestinationBucketPolicy:
     Type: 'AWS::IAM::Policy'
     Properties:
-      PolicyName: !Sub ['MSKConnectDestinationBucketPolicy-${ClusterName}', { ClusterName: !Ref MSKName }
+      PolicyName: !Sub ['MSKConnectDestinationBucketPolicy-${ClusterName}', { ClusterName: !Ref MSKName }]
       PolicyDocument:
         Version: "2012-10-17"
         Statement:
@@ -358,7 +358,7 @@ Resources:
     Type: 'AWS::IAM::Policy'
     Condition: EnableLogGroup
     Properties:
-      PolicyName: !Sub ['MSKLogPolicy-${ClusterName}', { ClusterName: !Ref MSKName }
+      PolicyName: !Sub ['MSKLogPolicy-${ClusterName}', { ClusterName: !Ref MSKName }]
       PolicyDocument:
         Version: "2012-10-17"
         Statement:
