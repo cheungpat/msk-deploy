@@ -1,5 +1,7 @@
 # Applying Kafka CloudFormation Stack
 
+![MSK Architecture](./msk-architecture.png)
+
 ## Overview
 
 Deploying MSK requires creating CloudFormation stacks and some post-creation tasks.
@@ -11,6 +13,22 @@ Each CloudFormation stack serves different purposes. They are separately created
 * Foundation: The Foundation stack creates IAM permissions, KMS secrets S3 and other resources that are shared among all MSK Clusters. There is no need to create a Foundation stack for each cluster.
 * Cluster: The Cluster stack creates MSK cluster and relevant resources for an environment, such as staging and production. Each environment requires creating this CloudFormation stack  one by one. Therefore, to deploy a staging environment and a production environment, two separate stacks are created.
 * Admin: The Admin stack contains an EC2 instance and relevant resources to manage the MSK cluster. The admin EC2 instance has to be deployed in the same VPC as the MSK clusters and it connects to the cluster via one of the subnets.
+
+## Types of resources created from CloudFormation stacks
+
+ * AWS::EC2::Instance
+ * AWS::EC2::SecurityGroup
+ * AWS::EC2::SecurityGroupIngress
+ * AWS::Glue::Registry
+ * AWS::IAM::Group
+ * AWS::IAM::InstanceProfile
+ * AWS::IAM::Policy
+ * AWS::IAM::Role
+ * AWS::Logs::LogGroup
+ * AWS::MSK::Cluster
+ * AWS::S3::Bucket
+ * AWS::KMS::Alias
+ * AWS::KMS::Key
 
 ## Stack Creation Instructions
 
