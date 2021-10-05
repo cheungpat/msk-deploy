@@ -97,3 +97,14 @@ To allow more administrators to access the Admin EC2 instance to manage the MSK 
 1. Login to the EC2 instance via SSH (username: `ubuntu`) using the SSH keypair selected when creating the Admin stack.
 2. Modify `~/.ssh/authorized_keys` file.
 3. Add public keys of the administrators at the end of the file.
+
+### Create IAM users for administrators and add to Admin IAM Group
+
+For administrators to manage MSK clusters and relevant AWS resources, each
+administrator should have an IAM user added to the Admin IAM Group. The Admin
+IAM Group is created as part of the Foundation CloudFormation stack. See the
+outputs of the stack to find the IAM group.
+
+1. Go to IAM Management Console
+2. Create IAM user add add the user to the Admin IAM Group.
+3. Add Console password and Access Key credentials.
